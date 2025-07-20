@@ -1,8 +1,10 @@
-import os
 import zipfile
+import ast
+import re
 import tomllib as toml
 import json
 import hashlib
+import shutil
 from pathlib import Path
 from html import escape
 
@@ -11,6 +13,43 @@ SRC_DIR = Path("src")
 REPO_DIR = Path("repo")
 ADDONS_DIR = REPO_DIR / "addons"
 EXTENSIONS_DIR = REPO_DIR / "extensions"
+INDEX_HTML = REPO_DIR / "index.html"
+
+
+def read_bl_info_from_zip(zip_path):
+    """
+    Liest das bl_info dict aus __init__.py einer legacy addon Zip-Datei aus.
+    Gibt das Dict zurück oder None, wenn nicht gefunden/fehlerhaft.
+    """
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            # Suche __init__.py im Root oder im ersten Ordner
+            candidates = [f for f in z.namelist() if f.endswith("__init__.py")]
+            if not candidates:
+                return None
+            
+            # Sortiere nach Pfadtiefe, kleinste zuerst
+            candidates.sort(key=lambda p: p.count('/'))
+            init_file = candidates[0]
+
+            with z.open(init_file) as f:
+                content = f.read().decode("utf-8", errors="ignore")
+
+            # Suche bl_info = { ... }
+            match = re.search(r"bl_info\s*=\s*({.*?})", content, re.DOTALL)
+            if not match:
+                return None
+
+            bl_info_str = match.group(1)
+
+            # Parse als Python-Literal (nur dicts, Listen, Strings, Zahlen etc.)
+            bl_info = ast.literal_eval(bl_info_str)
+
+            return bl_info
+    except Exception as e:
+        print(f"Fehler beim Lesen bl_info aus {zip_path}: {e}")
+        return None
+
 
 # Hilfsfunktion: sha256 Hash berechnen
 def sha256sum(filename):
@@ -124,8 +163,23 @@ def generate():
         print(f"Verarbeite {zip_file.name}...")
         manifest = read_manifest(zip_file)
         if not manifest:
-            print(f"  Kein gültiges Manifest gefunden, überspringe {zip_file.name}")
-            continue
+            # Legacy addon, versuche bl_info zu lesen
+            bl_info = read_bl_info_from_zip(zip_file)
+            if bl_info:
+                # Baue ein provisorisches manifest aus bl_info, damit Dashboard was hat
+                manifest = {
+                    "id": bl_info.get("name", zip_file.stem).lower().replace(" ", "_"),
+                    "name": bl_info.get("name", "Legacy Addon"),
+                    "version": ".".join(str(x) for x in bl_info.get("version", (0,0,0))),
+                    "type": "add-on",
+                    "blender_version_min": ".".join(str(x) for x in bl_info.get("blender", (0,0,0))),
+                    "tagline": bl_info.get("description", ""),
+                    "maintainer": bl_info.get("author", ""),
+                    # Weitere Felder kannst du ergänzen
+                }
+            else:
+                print(f"Kein manifest oder bl_info für {zip_file.name}, überspringe")
+                continue
 
         # Zielordner wählen
         if is_extension(manifest):
@@ -139,7 +193,7 @@ def generate():
             dstf.write(srcf.read())
 
         sha256 = sha256sum(target_path)
-
+       
         item = {
             "filename": zip_file.name,
             "manifest": manifest,
@@ -148,10 +202,10 @@ def generate():
 
         if target_dir == EXTENSIONS_DIR:
             all_extensions.append(item)
-            print(f"[✓] Als Extension einsortiert:{zip_file.name}")
+            print(f"[✓] Als Extension einsortiert")
         else:
             all_addons.append(item)
-            print(f"[•] Als Add-on einsortiert: {zip_file.name}")
+            print(f"[•] Als Add-on einsortiert")
 
     # index.json schreiben
     write_index_json(ADDONS_DIR, all_addons, "addons")
@@ -160,7 +214,34 @@ def generate():
     # HTML Dashboard schreiben
     write_dashboard(all_addons, all_extensions)
 
+def clear_repo():
+
+    # Lösche addons/
+    if ADDONS_DIR.exists() and ADDONS_DIR.is_dir():
+        print(f"Lösche {ADDONS_DIR}...")
+        shutil.rmtree(ADDONS_DIR)
+    else:
+        print(f"{ADDONS_DIR} nicht vorhanden.")
+
+    # Lösche extensions/
+    if EXTENSIONS_DIR.exists() and EXTENSIONS_DIR.is_dir():
+        print(f"Lösche {EXTENSIONS_DIR}...")
+        shutil.rmtree(EXTENSIONS_DIR)
+    else:
+        print(f"{EXTENSIONS_DIR} nicht vorhanden.")
+
+    # Lösche index.html
+    if INDEX_HTML.exists():
+        print(f"Lösche {INDEX_HTML}...")
+        INDEX_HTML.unlink()
+    else:
+        print(f"{INDEX_HTML} nicht vorhanden.")
+
+    print("✅ Repo-Verzeichnis wurde geleert.")
+
+
 def main():
+    clear_repo()
     print("🔄 Starte Repository-Generierung…")
     generate()
     print("✅ Fertig.")
