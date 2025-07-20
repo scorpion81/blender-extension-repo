@@ -1,104 +1,115 @@
 import os
-import json
+import zipfile
 import shutil
-from zipfile import ZipFile
+import json
+import hashlib
+from pathlib import Path
 
-SRC_DIR = "src"
-REPO_DIR = "repo"
-ADDONS_DIR = os.path.join(REPO_DIR, "addons")
-EXT_DIR = os.path.join(REPO_DIR, "extensions")
+SRC_DIR = Path("src")
+REPO_DIR = Path("repo")
+EXT_DIR = REPO_DIR / "extensions"
+ADDON_DIR = REPO_DIR / "addons"
+INDEX_FILE = EXT_DIR / "index.json"
+HTML_FILE = REPO_DIR / "index.html"
 
-os.makedirs(ADDONS_DIR, exist_ok=True)
-os.makedirs(EXT_DIR, exist_ok=True)
+BASE_URL = "http://localhost:8000/"  # ⬅️ Anpassen für externen Server
 
-entries = []
+def is_extension(zip_path: Path) -> bool:
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for name in zf.namelist():
+                if name.endswith("blender_manifest.json"):
+                    return True
+    except Exception as e:
+        print(f"[Warnung] Fehler beim Prüfen von {zip_path}: {e}")
+    return False
 
-def zip_dir(folder_path, zip_path):
-    with ZipFile(zip_path, 'w') as zf:
-        for root, _, files in os.walk(folder_path):
-            for f in files:
-                abs_path = os.path.join(root, f)
-                rel_path = os.path.relpath(abs_path, folder_path)
-                zf.write(abs_path, arcname=rel_path)
+def read_manifest_from_zip(zip_path: Path) -> dict:
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for name in zf.namelist():
+            if name.endswith("blender_manifest.json"):
+                with zf.open(name) as f:
+                    return json.load(f)
+    return {}
 
-def process_zip(zip_path):
-    with ZipFile(zip_path) as zf:
-        is_ext = "extension.json" in zf.namelist()
-        if is_ext:
-            with zf.open("extension.json") as f:
-                data = json.load(f)
-                version = data.get("version", "0.0.0")
-                name = data.get("name", os.path.splitext(os.path.basename(zip_path))[0])
-            addon_type = "extension"
+def sha256sum(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(65536), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def process_zips():
+    EXT_DIR.mkdir(parents=True, exist_ok=True)
+    ADDON_DIR.mkdir(parents=True, exist_ok=True)
+
+    ext_entries = []
+    addon_files = []
+
+    for zip_file in SRC_DIR.glob("*.zip"):
+        if is_extension(zip_file):
+            target = EXT_DIR / zip_file.name
+            shutil.copy2(zip_file, target)
+
+            manifest = read_manifest_from_zip(zip_file)
+            entry = {
+                "id": manifest.get("id", zip_file.stem),
+                "version": manifest.get("version", "0.0.0"),
+                "file": zip_file.name,
+                "url": BASE_URL + f"extensions/{zip_file.name}",
+                "sha256": sha256sum(target)
+            }
+            ext_entries.append(entry)
+            print(f"[✓] Extension erkannt: {zip_file.name}")
         else:
-            addon_type = "legacy"
-            base_name = os.path.basename(zip_path)
-            name_ver = os.path.splitext(base_name)[0]
-            name = name_ver
-            version = "0.0.0"
-    return addon_type, name, version
+            target = ADDON_DIR / zip_file.name
+            shutil.copy2(zip_file, target)
+            addon_files.append(zip_file.name)
+            print(f"[•] Addon erkannt: {zip_file.name}")
 
-for entry in os.listdir(SRC_DIR):
-    path = os.path.join(SRC_DIR, entry)
-    if os.path.isfile(path) and path.endswith(".zip"):
-        # ZIP direkt verarbeiten
-        addon_type, name, version = process_zip(path)
+    # index.json schreiben
+    with open(INDEX_FILE, "w", encoding="utf-8") as f:
+        json.dump({
+            "version": 1,
+            "extensions": ext_entries
+        }, f, indent=2)
+        print(f"[📝] index.json erzeugt ({len(ext_entries)} Extension(s))")
 
-        dest_dir = EXT_DIR if addon_type == "extension" else ADDONS_DIR
-        final_name = f"{name}-{version}.zip"
-        final_path = os.path.join(dest_dir, final_name)
+    # HTML generieren
+    generate_html(ext_entries, addon_files)
 
-        shutil.copy2(path, final_path)
+def generate_html(extensions: list, addons: list):
+    html = [
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>",
+        "<title>Blender Repo Dashboard</title>",
+        "<style>body{font-family:sans-serif;padding:2em}table{border-collapse:collapse;margin-bottom:2em}th,td{border:1px solid #ccc;padding:0.5em}</style>",
+        "</head><body>",
+        "<h1>📦 Blender Repository Übersicht</h1>",
+        "<h2>🔌 Extensions</h2>",
+        "<table><tr><th>ID</th><th>Version</th><th>Datei</th><th>SHA256</th></tr>"
+    ]
 
-        entries.append({
-            "name": name,
-            "version": version,
-            "description": f"{name} ({addon_type})",
-            "url": f"{addon_type}s/{final_name}",
-            "version_latest": version,
-            "type": addon_type,
-        })
+    for ext in extensions:
+        html.append(f"<tr><td>{ext['id']}</td><td>{ext['version']}</td>"
+                    f"<td><a href='extensions/{ext['file']}'>{ext['file']}</a></td>"
+                    f"<td><code>{ext['sha256'][:10]}…</code></td></tr>")
+    html.append("</table>")
 
-    elif os.path.isdir(path):
-        # Ordner zippen und auswerten
-        tmp_zip = os.path.join(REPO_DIR, f"{entry}.zip")
-        zip_dir(path, tmp_zip)
+    html.append("<h2>📁 Legacy Addons</h2><ul>")
+    for addon in addons:
+        html.append(f"<li><a href='addons/{addon}'>{addon}</a></li>")
+    html.append("</ul>")
 
-        addon_type, name, version = process_zip(tmp_zip)
+    html.append("</body></html>")
 
-        dest_dir = EXT_DIR if addon_type == "extension" else ADDONS_DIR
-        final_name = f"{name}-{version}.zip"
-        final_path = os.path.join(dest_dir, final_name)
+    with open(HTML_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(html))
+        print(f"[🧾] HTML-Dashboard geschrieben: {HTML_FILE}")
 
-        shutil.move(tmp_zip, final_path)
+def main():
+    print("🔄 Starte Generierung...")
+    process_zips()
+    print("✅ Abgeschlossen.")
 
-        entries.append({
-            "name": name,
-            "version": version,
-            "description": f"{name} ({addon_type})",
-            "url": f"{addon_type}s/{final_name}",
-            "version_latest": version,
-            "type": addon_type,
-        })
-
-# Index.json und index.html schreiben
-
-with open(os.path.join(REPO_DIR, "index.json"), "w") as f:
-    json.dump({"extensions": entries}, f, indent=2)
-
-html_parts = [
-    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Blender Addon Repo</title>",
-    "<style>body{font-family:sans-serif;padding:2em}input{width:100%;padding:.5em;margin-bottom:1em}",
-    ".entry{border:1px solid #ccc;padding:1em;margin:1em 0}.ext{background:#e7fce7}.leg{background:#fdf3d8}</style>",
-    "</head><body><h1>🧩 Blender Addons & Extensions</h1>",
-    "<input placeholder='🔍 Suche…' oninput='filter(this.value)'><div id='entries'>"
-]
-
-for e in entries:
-    cls = "ext" if e["type"] == "extension" else "leg"
-    html_parts.append(f"<div class='entry {cls}'><h3>{e['name']} <small>v{e['version']}</small></h3><p>Type: {e['type']}</p><a href='{e['url']}'>Download</a></div>")
-
-html_parts.append("</div><script>function filter(q){for(const el of document.querySelectorAll('.entry'))el.style.display=el.textContent.toLowerCase().includes(q.toLowerCase())?'':'none';}</script></body></html>")
-
-with open(os.path.join(REPO_DIR, "index.html"), "w", encoding="utf-8") as f:
-    f.write("\n".join(html_parts))
+if __name__ == "__main__":
+    main()
