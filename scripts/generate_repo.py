@@ -1,4 +1,3 @@
-
 import os
 import json
 import shutil
@@ -8,7 +7,6 @@ SRC_DIR = "src"
 REPO_DIR = "repo"
 ADDONS_DIR = os.path.join(REPO_DIR, "addons")
 EXT_DIR = os.path.join(REPO_DIR, "extensions")
-BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
 
 os.makedirs(ADDONS_DIR, exist_ok=True)
 os.makedirs(EXT_DIR, exist_ok=True)
@@ -23,57 +21,70 @@ def zip_dir(folder_path, zip_path):
                 rel_path = os.path.relpath(abs_path, folder_path)
                 zf.write(abs_path, arcname=rel_path)
 
-for folder in os.listdir(SRC_DIR):
-    path = os.path.join(SRC_DIR, folder)
-    if not os.path.isdir(path):
-        continue
-
-    zip_target = f"{folder}.zip"
-    tmp_zip = os.path.join(REPO_DIR, zip_target)
-    zip_dir(path, tmp_zip)
-
-    with ZipFile(tmp_zip) as zf:
+def process_zip(zip_path):
+    with ZipFile(zip_path) as zf:
         is_ext = "extension.json" in zf.namelist()
+        if is_ext:
+            with zf.open("extension.json") as f:
+                data = json.load(f)
+                version = data.get("version", "0.0.0")
+                name = data.get("name", os.path.splitext(os.path.basename(zip_path))[0])
+            addon_type = "extension"
+        else:
+            addon_type = "legacy"
+            base_name = os.path.basename(zip_path)
+            name_ver = os.path.splitext(base_name)[0]
+            name = name_ver
+            version = "0.0.0"
+    return addon_type, name, version
 
-    if is_ext:
-        dest_dir = EXT_DIR
-        addon_type = "extension"
-        with zf.open("extension.json") as f:
-            data = json.load(f)
-            version = data.get("version", "0.0.0")
-            name = data.get("name", folder)
-    else:
-        dest_dir = ADDONS_DIR
-        addon_type = "legacy"
-        init_path = os.path.join(path, "__init__.py")
-        version, name = "0.0.0", folder
-        if os.path.isfile(init_path):
-            with open(init_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if "bl_info" in line:
-                        break
-                for line in f:
-                    if "'version'" in line:
-                        version = line.split(":")[1].strip().strip(",()[] ").replace("'", "").replace('"', '')
-                        break
+for entry in os.listdir(SRC_DIR):
+    path = os.path.join(SRC_DIR, entry)
+    if os.path.isfile(path) and path.endswith(".zip"):
+        # ZIP direkt verarbeiten
+        addon_type, name, version = process_zip(path)
 
-    final_name = f"{name}-{version}.zip"
-    final_path = os.path.join(dest_dir, final_name)
-    shutil.move(tmp_zip, final_path)
+        dest_dir = EXT_DIR if addon_type == "extension" else ADDONS_DIR
+        final_name = f"{name}-{version}.zip"
+        final_path = os.path.join(dest_dir, final_name)
 
-    url = f"{BASE_URL}/{addon_type}s/{final_name}" if BASE_URL else f"{addon_type}s/{final_name}"
+        shutil.copy2(path, final_path)
 
-    entries.append({
-        "name": name,
-        "version": version,
-        "description": f"{name} ({addon_type})",
-        "url": url,
-        "version_latest": version,
-        "type": addon_type,
-    })
+        entries.append({
+            "name": name,
+            "version": version,
+            "description": f"{name} ({addon_type})",
+            "url": f"{addon_type}s/{final_name}",
+            "version_latest": version,
+            "type": addon_type,
+        })
+
+    elif os.path.isdir(path):
+        # Ordner zippen und auswerten
+        tmp_zip = os.path.join(REPO_DIR, f"{entry}.zip")
+        zip_dir(path, tmp_zip)
+
+        addon_type, name, version = process_zip(tmp_zip)
+
+        dest_dir = EXT_DIR if addon_type == "extension" else ADDONS_DIR
+        final_name = f"{name}-{version}.zip"
+        final_path = os.path.join(dest_dir, final_name)
+
+        shutil.move(tmp_zip, final_path)
+
+        entries.append({
+            "name": name,
+            "version": version,
+            "description": f"{name} ({addon_type})",
+            "url": f"{addon_type}s/{final_name}",
+            "version_latest": version,
+            "type": addon_type,
+        })
+
+# Index.json und index.html schreiben
 
 with open(os.path.join(REPO_DIR, "index.json"), "w") as f:
-    json.dump({ "extensions": entries }, f, indent=2)
+    json.dump({"extensions": entries}, f, indent=2)
 
 html_parts = [
     "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Blender Addon Repo</title>",
@@ -90,4 +101,4 @@ for e in entries:
 html_parts.append("</div><script>function filter(q){for(const el of document.querySelectorAll('.entry'))el.style.display=el.textContent.toLowerCase().includes(q.toLowerCase())?'':'none';}</script></body></html>")
 
 with open(os.path.join(REPO_DIR, "index.html"), "w", encoding="utf-8") as f:
-    f.write("".join(html_parts))
+    f.write("\n".join(html_parts))
