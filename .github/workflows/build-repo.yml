@@ -23,6 +23,7 @@ jobs:
           BASE_URL: https://<USERNAME>.github.io/<REPO>
         run: |
           pip install --upgrade pip
+          pip install packaging
           python scripts/generate_repo.py
 
       - id: path
