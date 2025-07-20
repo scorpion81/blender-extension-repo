@@ -15,7 +15,7 @@ REPO_DIR = Path("repo")
 ADDONS_DIR = REPO_DIR / "addons"
 EXTENSIONS_DIR = REPO_DIR / "extensions"
 INDEX_HTML = REPO_DIR / "index.html"
-OUT_DIR = REPO_DIR / "repo"
+OUT_DIR = REPO_DIR / "downloads"
 USE_WINDOWS_SAFE_PATH = True  # ersetzt : durch _ für sha256:<hash> → sha256_<hash>
 
 # Kategorisieren: addon oder extension?
@@ -95,7 +95,7 @@ def read_manifest(zip_path):
 # Index.json für Addons / Extensions schreiben
 def write_index_json(target_dir, items, key_name):
     
-    items.sort(key=lambda item: (item["version"])) # reverse=True)
+    items.sort(key=lambda item: (item["version"]), reverse=False)
 
     elems = {
         key_name: []
@@ -140,12 +140,12 @@ def write_dashboard(all_addons, all_extensions):
     <tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>
 """)
         for m in all_addons:
-            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='addons/{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
+            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
         f.write("</table>\n")
 
         f.write("<h2>🔌 Extensions</h2>\n<table>\n<tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>\n")
         for m in all_extensions:
-            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='extensions/{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
+            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
         f.write("</table>\n")
 
         f.write("""
@@ -221,16 +221,14 @@ def extract_metadata_from_zip(zip_path):
     return meta
 
 def build_item_from_zip(zip_path, metadata):
-    archive_name = zip_path.name
+    archive_name = os.path.basename(zip_path)
     archive_size = os.path.getsize(zip_path)
-    #archive_hash = "sha256:" + sha256sum(zip_path)
     archive_hash = sha256sum(zip_path)
-    #archive_url = f"https://extensions.blender.org/download/{archive_hash}/" + os.path.basename(zip_path)
-    #archive_url = os.path.basename(zip_path)
 
     hash_prefix = f"sha256:{archive_hash}"
     hash_folder = f"sha256_{archive_hash}" if USE_WINDOWS_SAFE_PATH else hash_prefix
-    archive_url = f"http://localhost:8000/{hash_folder}/{archive_name}"
+    archive_url = f"http://localhost:8000/downloads/{hash_folder}/{archive_name}"
+    #archive_url = f"{hash_folder}/{archive_name}"
 
     item = {
         "id": metadata["id"],
@@ -282,10 +280,10 @@ def generate_repo():
             dest_dir = ADDONS_DIR
 
         # Generate hash and output folder
-        with open(zip_path, "rb") as f:
-           archive_hash = hashlib.sha256(f.read()).hexdigest()
-           #archive_hash = sha256sum(f.read())
-           f.close()
+        #with open(zip_path, "rb") as f:
+        #   archive_hash = hashlib.sha256(f.read()).hexdigest()
+        archive_hash = sha256sum(zip_path)
+        #   f.close()
             
         hash_folder = f"sha256_{archive_hash}" if USE_WINDOWS_SAFE_PATH else f"sha256:{archive_hash}"
         target_dir = OUT_DIR / hash_folder
@@ -295,7 +293,7 @@ def generate_repo():
         import shutil
         shutil.copy2(zip_path, target_dir / filename)
 
-        item = build_item_from_zip(os.path.join(dest_dir, filename), meta)
+        item = build_item_from_zip(os.path.join(target_dir / filename), meta)
 
         if dest_dir == EXTENSIONS_DIR:
             all_extensions.append(item)
