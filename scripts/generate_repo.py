@@ -16,6 +16,22 @@ ADDONS_DIR = REPO_DIR / "addons"
 EXTENSIONS_DIR = REPO_DIR / "extensions"
 INDEX_HTML = REPO_DIR / "index.html"
 
+# Kategorisieren: addon oder extension?
+# Extension = type=="add-on" UND blender_version_min >= 4.3.0
+def is_extension(manifest):
+    if not manifest:
+        return False
+    t = manifest.get("type", "")
+    bv_min = manifest.get("blender_version_min", "0.0.0")
+    if t == "add-on":
+        # Vergleich Version 4.3.0 als str
+        # Einfach lexikalisch für Major.Minor.Patch reicht hier
+        def ver_tuple(v):
+            if isinstance(v, tuple):
+                return v
+            return tuple(int(x) for x in v.split("."))
+        return ver_tuple(bv_min) >= (4,3,0)
+    return False
 
 def read_bl_info_from_zip(zip_path):
     """
@@ -76,6 +92,9 @@ def read_manifest(zip_path):
 
 # Index.json für Addons / Extensions schreiben
 def write_index_json(target_dir, items, key_name):
+    
+    items.sort(key=lambda item: (item["version"])) # reverse=True)
+
     elems = {
         key_name: []
     }
@@ -192,7 +211,7 @@ def extract_metadata_from_zip(zip_path):
             "version": bl_info.get("version", "0.0.0") if isinstance(bl_info.get("version"), str) else ".".join(map(str, bl_info.get("version", (0,0,0)))),
             "tagline": bl_info.get("description", ""),
             "type": "add-on",
-            "blender_version_min": bl_info.get("blender", "4.0.0"),
+            "blender_version_min": bl_info.get("blender", (4,0,0)),
             "website": "",
             "maintainer": bl_info.get("author", ""),
             "license": ["SPDX:GPL-3.0-or-later"],
@@ -243,7 +262,7 @@ def generate_repo():
             continue
 
         # Zielordner wählen
-        if meta["type"] == "extension":
+        if is_extension(meta):
             dest_dir = EXTENSIONS_DIR
         else:
             dest_dir = ADDONS_DIR
