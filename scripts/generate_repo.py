@@ -239,8 +239,8 @@ def build_item_from_zip(zip_path, metadata):
 
     hash_prefix = f"sha256:{archive_hash}"
     hash_folder = f"sha256_{archive_hash}" if USE_WINDOWS_SAFE_PATH else hash_prefix
-    archive_url = f"http://localhost:8000/downloads/{hash_folder}/{archive_name}"
-    #archive_url = f"{hash_folder}/{archive_name}"
+    base_url = os.environ.get("BASE_URL", "http://localhost:8000")
+    archive_url = f"{base_url}/downloads/{hash_folder}/{archive_name}"
 
     item = {
         "id": metadata["id"],
