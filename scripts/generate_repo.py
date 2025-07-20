@@ -92,10 +92,22 @@ def read_manifest(zip_path):
         print(f"Fehler beim Lesen Manifest {zip_path}: {e}")
     return None
 
+def get_latest_items(items):
+    from packaging.version import Version
+
+    latest_by_id = {}
+    for item in items:
+        id_ = item["id"]
+        ver = Version(item["version"])
+        if id_ not in latest_by_id or ver > Version(latest_by_id[id_]["version"]):
+            latest_by_id[id_] = item
+    return list(latest_by_id.values())
+
 # Index.json für Addons / Extensions schreiben
 def write_index_json(target_dir, items, key_name):
     
-    items.sort(key=lambda item: (item["version"]), reverse=False)
+    #items = sorted(items, key=lambda x: (x["id"], Version(x["version"])), reverse=True) #weird sorting order, seems undefined
+    items = get_latest_items(items)
 
     elems = {
         key_name: []
