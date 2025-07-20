@@ -90,19 +90,26 @@ def is_extension(manifest):
 
 # Index.json für Addons / Extensions schreiben
 def write_index_json(target_dir, items, key_name):
-    index = {
-        "version": 1,
+    elems = {
         key_name: []
     }
     for item in items:
-        index[key_name].append({
+        elems[key_name].append({
             "id": item["manifest"]["id"],
+            "schema_version": "1.0.0",
             "version": item["manifest"]["version"],
             "file": item["filename"],
             "url": f"{target_dir.name}/{item['filename']}",
             "sha256": item["sha256"],
         })
     out_file = target_dir / "index.json"
+
+    index = {
+        "blocklist":[],
+        "data": elems[key_name],
+        "version": "v1"
+    }
+
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
     print(f"[📝]Index geschrieben: {out_file}")
