@@ -1,11 +1,12 @@
 import os
 import zipfile
-import toml
+import tomllib as toml
 import json
 import hashlib
 from pathlib import Path
 from html import escape
 
+# Verzeichnisse
 SRC_DIR = Path("src")
 REPO_DIR = Path("repo")
 ADDONS_DIR = REPO_DIR / "addons"
@@ -65,7 +66,7 @@ def write_index_json(target_dir, items, key_name):
     out_file = target_dir / "index.json"
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
-    print(f"Index geschrieben: {out_file}")
+    print(f"[📝]Index geschrieben: {out_file}")
 
 # Einfaches HTML Dashboard erzeugen
 def write_dashboard(all_addons, all_extensions):
@@ -89,7 +90,7 @@ def write_dashboard(all_addons, all_extensions):
 <body>
   <h1>Blender Repo Dashboard</h1>
   
-  <h2>Add-ons</h2>
+  <h2>📁 Legacy Addons</h2>
   <table>
     <tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>
 """)
@@ -98,7 +99,7 @@ def write_dashboard(all_addons, all_extensions):
             f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(m.get('blender_version_min','-'))}</td><td><a href='addons/{escape(item['filename'])}'>{escape(item['filename'])}</a></td></tr>\n")
         f.write("</table>\n")
 
-        f.write("<h2>Extensions</h2>\n<table>\n<tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>\n")
+        f.write("<h2>🔌 Extensions</h2>\n<table>\n<tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>\n")
         for item in all_extensions:
             m = item["manifest"]
             f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(m.get('blender_version_min','-'))}</td><td><a href='extensions/{escape(item['filename'])}'>{escape(item['filename'])}</a></td></tr>\n")
@@ -108,9 +109,9 @@ def write_dashboard(all_addons, all_extensions):
 </body>
 </html>
 """)
-    print(f"Dashboard geschrieben: {html_path}")
+    print(f"[📝]HTML-Dashboard geschrieben: {html_path}")
 
-def main():
+def generate():
     # Ordner anlegen
     ADDONS_DIR.mkdir(parents=True, exist_ok=True)
     EXTENSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,10 +148,10 @@ def main():
 
         if target_dir == EXTENSIONS_DIR:
             all_extensions.append(item)
-            print(f"  Als Extension einsortiert")
+            print(f"[✓] Als Extension einsortiert:{zip_file.name}")
         else:
             all_addons.append(item)
-            print(f"  Als Add-on einsortiert")
+            print(f"[•] Als Add-on einsortiert: {zip_file.name}")
 
     # index.json schreiben
     write_index_json(ADDONS_DIR, all_addons, "addons")
@@ -158,6 +159,11 @@ def main():
 
     # HTML Dashboard schreiben
     write_dashboard(all_addons, all_extensions)
+
+def main():
+    print("🔄 Starte Repository-Generierung…")
+    generate()
+    print("✅ Fertig.")
 
 if __name__ == "__main__":
     main()
