@@ -15,6 +15,8 @@ REPO_DIR = Path("repo")
 ADDONS_DIR = REPO_DIR / "addons"
 EXTENSIONS_DIR = REPO_DIR / "extensions"
 INDEX_HTML = REPO_DIR / "index.html"
+OUT_DIR = REPO_DIR / "repo"
+USE_WINDOWS_SAFE_PATH = True  # ersetzt : durch _ für sha256:<hash> → sha256_<hash>
 
 # Kategorisieren: addon oder extension?
 # Extension = type=="add-on" UND blender_version_min >= 4.3.0
@@ -219,10 +221,16 @@ def extract_metadata_from_zip(zip_path):
     return meta
 
 def build_item_from_zip(zip_path, metadata):
+    archive_name = zip_path.name
     archive_size = os.path.getsize(zip_path)
-    archive_hash = "sha256:" + sha256sum(zip_path)
+    #archive_hash = "sha256:" + sha256sum(zip_path)
+    archive_hash = sha256sum(zip_path)
     #archive_url = f"https://extensions.blender.org/download/{archive_hash}/" + os.path.basename(zip_path)
-    archive_url = os.path.basename(zip_path)
+    #archive_url = os.path.basename(zip_path)
+
+    hash_prefix = f"sha256:{archive_hash}"
+    hash_folder = f"sha256_{archive_hash}" if USE_WINDOWS_SAFE_PATH else hash_prefix
+    archive_url = f"http://localhost:8000/{hash_folder}/{archive_name}"
 
     item = {
         "id": metadata["id"],
@@ -230,7 +238,7 @@ def build_item_from_zip(zip_path, metadata):
         "name": metadata["name"],
         "version": metadata["version"],
         "tagline": metadata.get("tagline", ""),
-        "archive_hash": archive_hash,
+        "archive_hash": hash_prefix,
         "archive_size": archive_size,
         "archive_url": archive_url,
         "type": metadata["type"],
@@ -242,6 +250,12 @@ def build_item_from_zip(zip_path, metadata):
     return item
 
 def generate_repo():
+    
+    import shutil
+    print("[*] Cleaning output...")
+    if OUT_DIR.exists():
+        shutil.rmtree(OUT_DIR)
+    OUT_DIR.mkdir(parents=True)
 
     # Ordner anlegen
     ADDONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -267,9 +281,19 @@ def generate_repo():
         else:
             dest_dir = ADDONS_DIR
 
+        # Generate hash and output folder
+        with open(zip_path, "rb") as f:
+           archive_hash = hashlib.sha256(f.read()).hexdigest()
+           #archive_hash = sha256sum(f.read())
+           f.close()
+            
+        hash_folder = f"sha256_{archive_hash}" if USE_WINDOWS_SAFE_PATH else f"sha256:{archive_hash}"
+        target_dir = OUT_DIR / hash_folder
+        target_dir.mkdir(parents=True, exist_ok=True)
+
         # Kopiere ZIP (ohne umbenennen)
         import shutil
-        shutil.copy2(zip_path, dest_dir)
+        shutil.copy2(zip_path, target_dir / filename)
 
         item = build_item_from_zip(os.path.join(dest_dir, filename), meta)
 
