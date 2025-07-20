@@ -5,6 +5,7 @@ import tomllib as toml
 import json
 import hashlib
 import shutil
+import os
 from pathlib import Path
 from html import escape
 
@@ -73,35 +74,12 @@ def read_manifest(zip_path):
         print(f"Fehler beim Lesen Manifest {zip_path}: {e}")
     return None
 
-# Kategorisieren: addon oder extension?
-# Extension = type=="add-on" UND blender_version_min >= 4.3.0
-def is_extension(manifest):
-    if not manifest:
-        return False
-    t = manifest.get("type", "")
-    bv_min = manifest.get("blender_version_min", "0.0.0")
-    if t == "add-on":
-        # Vergleich Version 4.3.0 als str
-        # Einfach lexikalisch für Major.Minor.Patch reicht hier
-        def ver_tuple(v):
-            return tuple(int(x) for x in v.split("."))
-        return ver_tuple(bv_min) >= (4,3,0)
-    return False
-
 # Index.json für Addons / Extensions schreiben
 def write_index_json(target_dir, items, key_name):
     elems = {
         key_name: []
     }
-    for item in items:
-        elems[key_name].append({
-            "id": item["manifest"]["id"],
-            "schema_version": "1.0.0",
-            "version": item["manifest"]["version"],
-            "file": item["filename"],
-            "url": f"{target_dir.name}/{item['filename']}",
-            "sha256": item["sha256"],
-        })
+    elems[key_name] = items
     out_file = target_dir / "index.json"
 
     index = {
@@ -140,15 +118,13 @@ def write_dashboard(all_addons, all_extensions):
   <table>
     <tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>
 """)
-        for item in all_addons:
-            m = item["manifest"]
-            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(m.get('blender_version_min','-'))}</td><td><a href='addons/{escape(item['filename'])}'>{escape(item['filename'])}</a></td></tr>\n")
+        for m in all_addons:
+            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='addons/{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
         f.write("</table>\n")
 
         f.write("<h2>🔌 Extensions</h2>\n<table>\n<tr><th>ID</th><th>Version</th><th>Blender Min</th><th>Datei</th></tr>\n")
-        for item in all_extensions:
-            m = item["manifest"]
-            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(m.get('blender_version_min','-'))}</td><td><a href='extensions/{escape(item['filename'])}'>{escape(item['filename'])}</a></td></tr>\n")
+        for m in all_extensions:
+            f.write(f"<tr><td>{escape(m.get('id','-'))}</td><td>{escape(m.get('version','-'))}</td><td>{escape(str(m.get('blender_version_min','-')))}</td><td><a href='extensions/{escape(m['archive_url'])}'>{escape(m['archive_url'])}</a></td></tr>\n")
         f.write("</table>\n")
 
         f.write("""
@@ -157,7 +133,97 @@ def write_dashboard(all_addons, all_extensions):
 """)
     print(f"[📝]HTML-Dashboard geschrieben: {html_path}")
 
-def generate():
+def read_toml_manifest(toml_bytes):
+    return toml.loads(toml_bytes.decode("utf-8"))
+
+def read_bl_info_from_init(zip_path, init_path):
+    # liest bl_info dict aus __init__.py
+    with zipfile.ZipFile(zip_path) as z:
+        source = z.read(init_path).decode("utf-8")
+    # einfacher parser für bl_info (Vorsicht: eval unsicher, hier nur für lokale vertrauenswürdige Dateien)
+    import ast
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if getattr(target, 'id', None) == 'bl_info':
+                    return ast.literal_eval(node.value)
+    return {}
+
+def extract_metadata_from_zip(zip_path):
+    with zipfile.ZipFile(zip_path) as z:
+        # Suche nach blender_manifest.toml
+        manifest_path = None
+        for name in z.namelist():
+            if name.endswith("blender_manifest.toml"):
+                manifest_path = name
+                break
+
+        if manifest_path:
+            manifest_bytes = z.read(manifest_path)
+            manifest = read_toml_manifest(manifest_bytes)
+            # Mapping für Metadata aus Manifest (einige Felder optional)
+            meta = {
+                "id": manifest.get("id"),
+                "name": manifest.get("name"),
+                "version": manifest.get("version"),
+                "tagline": manifest.get("tagline", ""),
+                "type": manifest.get("type", "add-on"),
+                "blender_version_min": manifest.get("blender_version_min", "4.0.0"),
+                "website": manifest.get("website", ""),
+                "maintainer": ", ".join(manifest.get("copyright", [])) if "copyright" in manifest else manifest.get("maintainer", ""),
+                "license": manifest.get("license", ["SPDX:GPL-3.0-or-later"]),
+            }
+            return meta
+
+        # Wenn kein Manifest, suche nach bl_info in __init__.py (Legacy Addon)
+        candidates = [f for f in z.namelist() if f.endswith("__init__.py")]
+        if not candidates:
+            return None
+        # Priorisiere kürzeste Pfade
+        candidates.sort(key=lambda p: p.count('/'))
+        init_file = candidates[0]
+        bl_info = read_bl_info_from_init(zip_path, init_file)
+        if not bl_info:
+            return None
+        meta = {
+            "id": bl_info.get("name", "").lower().replace(" ", "_"),
+            "name": bl_info.get("name", ""),
+            "version": bl_info.get("version", "0.0.0") if isinstance(bl_info.get("version"), str) else ".".join(map(str, bl_info.get("version", (0,0,0)))),
+            "tagline": bl_info.get("description", ""),
+            "type": "add-on",
+            "blender_version_min": bl_info.get("blender", "4.0.0"),
+            "website": "",
+            "maintainer": bl_info.get("author", ""),
+            "license": ["SPDX:GPL-3.0-or-later"],
+        }
+    return meta
+
+def build_item_from_zip(zip_path, metadata):
+    archive_size = os.path.getsize(zip_path)
+    archive_hash = "sha256:" + sha256sum(zip_path)
+    #archive_url = f"https://extensions.blender.org/download/{archive_hash}/" + os.path.basename(zip_path)
+    archive_url = os.path.basename(zip_path)
+
+    item = {
+        "id": metadata["id"],
+        "schema_version": "1.0.0",
+        "name": metadata["name"],
+        "version": metadata["version"],
+        "tagline": metadata.get("tagline", ""),
+        "archive_hash": archive_hash,
+        "archive_size": archive_size,
+        "archive_url": archive_url,
+        "type": metadata["type"],
+        "blender_version_min": metadata.get("blender_version_min", "4.0.0"),
+        "website": metadata.get("website", ""),
+        "maintainer": metadata.get("maintainer", ""),
+        "license": metadata.get("license", ["SPDX:GPL-3.0-or-later"]),
+    }
+    return item
+
+def generate_repo():
+
     # Ordner anlegen
     ADDONS_DIR.mkdir(parents=True, exist_ok=True)
     EXTENSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -165,49 +231,30 @@ def generate():
     all_addons = []
     all_extensions = []
 
-    # Alle ZIPs im src
-    for zip_file in SRC_DIR.glob("*.zip"):
-        print(f"Verarbeite {zip_file.name}...")
-        manifest = read_manifest(zip_file)
-        if not manifest:
-            # Legacy addon, versuche bl_info zu lesen
-            bl_info = read_bl_info_from_zip(zip_file)
-            if bl_info:
-                # Baue ein provisorisches manifest aus bl_info, damit Dashboard was hat
-                manifest = {
-                    "id": bl_info.get("name", zip_file.stem).lower().replace(" ", "_"),
-                    "name": bl_info.get("name", "Legacy Addon"),
-                    "version": ".".join(str(x) for x in bl_info.get("version", (0,0,0))),
-                    "type": "add-on",
-                    "blender_version_min": ".".join(str(x) for x in bl_info.get("blender", (0,0,0))),
-                    "tagline": bl_info.get("description", ""),
-                    "maintainer": bl_info.get("author", ""),
-                    # Weitere Felder kannst du ergänzen
-                }
-            else:
-                print(f"Kein manifest oder bl_info für {zip_file.name}, überspringe")
-                continue
+    for filename in os.listdir(SRC_DIR):
+        if not filename.endswith(".zip"):
+            continue
+        zip_path = os.path.join(SRC_DIR, filename)
+        print(f"Verarbeite {filename}...")
+        
+        meta = extract_metadata_from_zip(zip_path)
+        if not meta:
+            print(f"WARNING: Konnte Metadaten aus {filename} nicht auslesen, überspringe...")
+            continue
 
         # Zielordner wählen
-        if is_extension(manifest):
-            target_dir = EXTENSIONS_DIR
+        if meta["type"] == "extension":
+            dest_dir = EXTENSIONS_DIR
         else:
-            target_dir = ADDONS_DIR
+            dest_dir = ADDONS_DIR
 
-        target_path = target_dir / zip_file.name
-        # ZIP kopieren ohne umzubenennen
-        with open(zip_file, "rb") as srcf, open(target_path, "wb") as dstf:
-            dstf.write(srcf.read())
+        # Kopiere ZIP (ohne umbenennen)
+        import shutil
+        shutil.copy2(zip_path, dest_dir)
 
-        sha256 = sha256sum(target_path)
-       
-        item = {
-            "filename": zip_file.name,
-            "manifest": manifest,
-            "sha256": sha256
-        }
+        item = build_item_from_zip(os.path.join(dest_dir, filename), meta)
 
-        if target_dir == EXTENSIONS_DIR:
+        if dest_dir == EXTENSIONS_DIR:
             all_extensions.append(item)
             print(f"[✓] Als Extension einsortiert")
         else:
@@ -250,7 +297,7 @@ def clear_repo():
 def main():
     clear_repo()
     print("🔄 Starte Repository-Generierung…")
-    generate()
+    generate_repo()
     print("✅ Fertig.")
 
 if __name__ == "__main__":
