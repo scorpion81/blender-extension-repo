@@ -8,6 +8,7 @@ import shutil
 import os
 from pathlib import Path
 from html import escape
+from packaging.version import Version
 
 # Verzeichnisse
 SRC_DIR = Path("src")
@@ -93,8 +94,6 @@ def read_manifest(zip_path):
     return None
 
 def get_latest_items(items):
-    from packaging.version import Version
-
     latest_by_id = {}
     for item in items:
         id_ = item["id"]
@@ -319,6 +318,8 @@ def generate_repo():
     write_index_json(EXTENSIONS_DIR, all_extensions, "extensions")
 
     # HTML Dashboard schreiben
+    all_addons = sorted(all_addons, key=lambda x: Version(x["version"]), reverse=True)
+    all_extensions = sorted(all_extensions, key=lambda x: Version(x["version"]), reverse=True)
     write_dashboard(all_addons, all_extensions)
 
 def clear_repo():
