@@ -41,6 +41,7 @@ jobs:
         run: |
           EXT_SRC=packages/${{ matrix.package }}/repo
           DIST_DIR=$EXT_SRC/dist
+          mkdir -p $DIST_DIR
           python scripts/blender_ext.py build --source-dir $EXT_SRC --output-dir $DIST_DIR
 
       - name: Upload extension zips
