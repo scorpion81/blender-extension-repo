@@ -7,14 +7,76 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.13"]
+        package: [developer_utilities]
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
+      - name: Install Pyyaml
+        run: pip install pyyaml
+
+      - name: Clone external repo
+        run: |
+          REPO=$(python scripts/load_config.py ${{ matrix.package }} repo)
+          REF=$(python scripts/load_config.py ${{ matrix.package }} ref)
+
+          git clone --recursive $REPO packages/${{ matrix.package }}/repo
+          cd packages/${{ matrix.package }}/repo
+          git checkout $REF
+
+      - name: Build extension zip
+        run: |
+          cd packages/${{ matrix.package }}/repo
+          python scripts/blender_ext.py
+
+      - name: Upload extension zips
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.python-version }}-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/repo/dist/*.zip
+
+  build_repo:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Download all zips
+        uses: actions/download-artifact@v4
+        with:
+          path: all_wheels
+
+      - name: Flatten artifacts
+        run: |
+          mkdir merged
+          find all_wheels -name "*.zip" -exec cp {} merged/ \;
+
+      - name: Copy to src
+        run: |
+          mkdir -p src
+          cp merged/*.zip src/
+          
       - name: Build Repository
         env:
           BASE_URL: https://scorpion81.github.io/blender-extension-repo
@@ -29,25 +91,23 @@ jobs:
         with:
           name: repo
           path: repo
-
+  
   deploy:
-    needs: build
+
+    needs: build_repo
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+
     permissions:
-      contents: write
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download repo artifact
-        uses: actions/download-artifact@v4
+      - id: deployment
+        uses: actions/deploy-pages@v4
         with:
-          name: repo
           path: repo
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./repo
-          publish_branch: gh-pages

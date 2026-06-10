@@ -1,0 +1,5 @@
+packages:
+  developer_utilities:
+    repo: https://github.com/scorpion81/developer_utilities.git
+    ref: main
+    path: .
